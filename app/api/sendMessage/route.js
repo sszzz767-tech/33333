@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 const DINGTALK_WEBHOOK =
   process.env.DINGTALK_WEBHOOK ||
-  "https://oapi.dingtalk.com/robot/send?access_token=d8a49f84681d1e8b6cddd7fa7607ad74a2825402b70c4b188cf6128ade4fc1f4";
+  "https://oapi.dingtalk.com/robot/send?access_token=a117def1fa7a3531c5d4e2c008842a571256cfec79cde5d5afbc2e20b668f344";
 
 // 中继服务地址 - 替换成你的函数计算地址！
 const RELAY_SERVICE_URL = process.env.RELAY_SERVICE_URL || "https://send-todingtalk-pnvjfgztkw.cn-hangzhou.fcapp.run";
