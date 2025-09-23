@@ -7,8 +7,14 @@ const DINGTALK_WEBHOOK =
 // 中继服务地址 - 替换成你的函数计算地址！
 const RELAY_SERVICE_URL = process.env.RELAY_SERVICE_URL || "https://send-todingtalk-pnvjfgztkw.cn-hangzhou.fcapp.run";
 
+// 腾讯云函数地址 - 用于KOOK消息发送
+const TENCENT_CLOUD_KOOK_URL = process.env.TENCENT_CLOUD_KOOK_URL || "https://1323960433-h9kgnqff21.ap-guangzhou.tencentscf.com";
+
 // 控制是否使用中继服务的开关
 const USE_RELAY_SERVICE = process.env.USE_RELAY_SERVICE === "true"; // 设置为 "true" 启用中继
+
+// 控制是否发送到KOOK的开关
+const SEND_TO_KOOK = process.env.SEND_TO_KOOK === "true"; // 设置为 "true" 启用KOOK发送
 
 const lastEntryBySymbol = Object.create(null);
 
@@ -298,6 +304,77 @@ function simplifyEmojis(text) {
     .replace(/\\u2728/g, dingtalkEmojis["✨"]); // ✨
 }
 
+// 新增：发送到腾讯云函数（KOOK）的函数
+async function sendToKook(messageData, rawData, messageType) {
+  if (!SEND_TO_KOOK) {
+    console.log("KOOK发送未启用，跳过");
+    return { success: true, skipped: true };
+  }
+
+  try {
+    console.log("准备发送到腾讯云KOOK服务...");
+    
+    const kookPayload = {
+      // 原始数据
+      rawData: rawData,
+      // 格式化后的消息
+      formattedMessage: messageData,
+      // 消息类型
+      messageType: messageType,
+      // 时间戳
+      timestamp: Date.now(),
+      // 交易信息
+      tradingInfo: {
+        symbol: getSymbol(rawData),
+        direction: getDirection(rawData),
+        entryPrice: getNum(rawData, "开仓价格"),
+        triggerPrice: getNum(rawData, "平仓价格") || getNum(rawData, "触发价格"),
+        profitPercent: extractProfitPctFromText(rawData)
+      }
+    };
+
+    console.log("KOOK请求负载:", kookPayload);
+
+    const response = await fetch(TENCENT_CLOUD_KOOK_URL, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "User-Agent": "Tradingview-Vercel-Bot/1.0"
+      },
+      body: JSON.stringify(kookPayload),
+      timeout: 10000 // 10秒超时
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const result = await response.json();
+    console.log("腾讯云KOOK服务响应:", result);
+    
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("发送到腾讯云KOOK服务失败:", error);
+    // 不抛出错误，避免影响主流程
+    return { 
+      success: false, 
+      error: error.message,
+      skipped: false
+    };
+  }
+}
+
+// 新增：判断消息类型
+function getMessageType(text) {
+  if (isTP2(text)) return "TP2";
+  if (isTP1(text)) return "TP1";
+  if (isBreakeven(text)) return "BREAKEVEN";
+  if (isBreakevenStop(text)) return "BREAKEVEN_STOP";
+  if (isInitialStop(text)) return "INITIAL_STOP";
+  if (isEntry(text)) return "ENTRY";
+  return "OTHER";
+}
+
 function formatForDingTalk(raw) {
   // 首先清理所有可能的乱码，但保留中文和基本表情
   let text = String(raw || "")
@@ -565,6 +642,7 @@ export async function POST(req) {
     console.log("处理后的消息:", processedRaw);
 
     const formattedMessage = formatForDingTalk(processedRaw);
+    const messageType = getMessageType(processedRaw);
 
     // 判断是否需要图片
     let needImage = false;
@@ -614,61 +692,81 @@ export async function POST(req) {
       };
     }
 
-    // 使用中继服务发送消息
-    if (USE_RELAY_SERVICE) {
-      console.log("使用中继服务发送消息...");
+    // 并行发送到钉钉和KOOK
+    const [dingtalkResult, kookResult] = await Promise.allSettled([
+      // 发送到钉钉（原有逻辑）
+      (async () => {
+        if (USE_RELAY_SERVICE) {
+          console.log("使用中继服务发送消息到钉钉...");
 
-      // 准备发送到中继服务的请求
-      const relayPayload = {
-        message: formattedMessage,
-        needImage,
-        imageParams,
-        dingtalkWebhook: DINGTALK_WEBHOOK
-      };
+          const relayPayload = {
+            message: formattedMessage,
+            needImage,
+            imageParams,
+            dingtalkWebhook: DINGTALK_WEBHOOK
+          };
 
-      console.log("中继服务请求负载:", relayPayload);
+          console.log("中继服务请求负载:", relayPayload);
 
-      // 调用中继服务
-      const relayResponse = await fetch(RELAY_SERVICE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(relayPayload),
-      });
+          const relayResponse = await fetch(RELAY_SERVICE_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(relayPayload),
+          });
 
-      const relayData = await relayResponse.json();
-      console.log("中继服务响应:", relayData);
-      
-      if (!relayData.success) {
-        throw new Error(relayData.error || "中继服务返回错误");
-      }
-      
-      return NextResponse.json({ ok: true, relayData, method: "relay" });
-    } else {
-      // 直接发送到钉钉（原有逻辑）
-      console.log("直接发送到钉钉...");
-      
-      const markdown = {
-        msgtype: "markdown",
-        markdown: {
-          title: "交易通知",
-          text: formattedMessage,
-        },
-        at: { isAtAll: false },
-      };
+          const relayData = await relayResponse.json();
+          console.log("中继服务响应:", relayData);
+          
+          if (!relayData.success) {
+            throw new Error(relayData.error || "中继服务返回错误");
+          }
+          
+          return { ok: true, relayData, method: "relay" };
+        } else {
+          // 直接发送到钉钉
+          console.log("直接发送到钉钉...");
+          
+          const markdown = {
+            msgtype: "markdown",
+            markdown: {
+              title: "交易通知",
+              text: formattedMessage,
+            },
+            at: { isAtAll: false },
+          };
 
-      console.log("发送的消息内容:", markdown.markdown.text);
+          console.log("发送的消息内容:", markdown.markdown.text);
 
-      const resp = await fetch(DINGTALK_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(markdown),
-      });
+          const resp = await fetch(DINGTALK_WEBHOOK, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(markdown),
+          });
 
-      const data = await resp.json().catch(() => ({}));
-      console.log("钉钉响应:", data);
-      
-      return NextResponse.json({ ok: true, dingTalk: data, method: "direct" });
-    }
+          const data = await resp.json().catch(() => ({}));
+          console.log("钉钉响应:", data);
+          
+          return { ok: true, dingTalk: data, method: "direct" };
+        }
+      })(),
+
+      // 发送到KOOK（新增功能）
+      sendToKook(formattedMessage, processedRaw, messageType)
+    ]);
+
+    // 处理结果
+    const results = {
+      dingtalk: dingtalkResult.status === 'fulfilled' ? dingtalkResult.value : { error: dingtalkResult.reason?.message },
+      kook: kookResult.status === 'fulfilled' ? kookResult.value : { error: kookResult.reason?.message }
+    };
+
+    console.log("最终发送结果:", results);
+
+    return NextResponse.json({ 
+      ok: true, 
+      results,
+      method: USE_RELAY_SERVICE ? "relay" : "direct"
+    });
   } catch (e) {
     console.error(e);
     return NextResponse.json(
