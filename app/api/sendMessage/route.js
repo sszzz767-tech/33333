@@ -11,8 +11,6 @@ const KOOK_BOT_TOKEN = process.env.KOOK_BOT_TOKEN;
 
 // 中继服务地址
 const RELAY_SERVICE_URL = process.env.RELAY_SERVICE_URL || "https://send-todingtalk-pnvjfgztkw.cn-hangzhou.fcapp.run";
-
-// 控制是否使用中继服务的开关
 const USE_RELAY_SERVICE = process.env.USE_RELAY_SERVICE === "true";
 
 const lastEntryBySymbol = Object.create(null);
@@ -496,43 +494,50 @@ function formatForDingTalk(raw) {
   return simplifyEmojis(header + body);
 }
 
-// KOOK消息处理函数
-function handleKookWebhook(body) {
-  // 处理KOOK验证请求
-  if (body.type === 255 && body.challenge) {
-    if (body.verify_token !== KOOK_VERIFY_TOKEN) {
-      throw new Error("Invalid KOOK verify token");
-    }
-    return { challenge: body.challenge };
+// 专门的 KOOK Challenge 处理器
+function handleKookChallenge(body) {
+  console.log("处理 KOOK Challenge 请求:", {
+    verify_token_received: body.verify_token,
+    challenge: body.challenge,
+    verify_token_expected: KOOK_VERIFY_TOKEN
+  });
+  
+  // 验证 Verify Token
+  if (body.verify_token !== KOOK_VERIFY_TOKEN) {
+    console.error("Verify Token 不匹配:", {
+      received: body.verify_token,
+      expected: KOOK_VERIFY_TOKEN
+    });
+    throw new Error("Invalid KOOK verify token");
   }
   
-  // 处理文本消息
-  if (body.type === 1) {
-    let messageContent = body.content;
-    const channelId = body.target_id;
-    
-    console.log("收到KOOK消息:", messageContent);
-    
-    // 移除@机器人的标记
-    if (messageContent.includes('(met)') && messageContent.includes('(met)')) {
-      messageContent = messageContent.replace(/\(met\)[^()]*\(met\)/g, '').trim();
-    }
-    
-    const formattedMessage = formatForDingTalk(messageContent);
-    
-    // 可选：在KOOK中回复确认
-    if (KOOK_BOT_TOKEN) {
-      sendKookMessage(channelId, "✅ 消息已收到并处理").catch(console.error);
-    }
-    
-    return { 
-      message: "KOOK消息处理完成", 
-      formattedMessage,
-      shouldForwardToDingTalk: true 
-    };
+  console.log("Challenge 验证成功");
+  return { challenge: body.challenge };
+}
+
+// 处理 KOOK 普通消息
+function handleKookMessage(body) {
+  let messageContent = body.content;
+  const channelId = body.target_id;
+  
+  console.log("收到 KOOK 消息:", messageContent);
+  
+  // 移除@机器人的标记
+  if (messageContent.includes('(met)') && messageContent.includes('(met)')) {
+    messageContent = messageContent.replace(/\(met\)[^()]*\(met\)/g, '').trim();
   }
   
-  return { message: "忽略的KOOK事件类型", shouldForwardToDingTalk: false };
+  const formattedMessage = formatForDingTalk(messageContent);
+  
+  // 可选：在KOOK中回复确认
+  if (KOOK_BOT_TOKEN) {
+    sendKookMessage(channelId, "✅ 消息已收到并处理").catch(console.error);
+  }
+  
+  return { 
+    formattedMessage,
+    shouldForwardToDingTalk: true 
+  };
 }
 
 // 发送消息到KOOK
@@ -557,193 +562,240 @@ async function sendKookMessage(channelId, content) {
   return await response.json();
 }
 
-// 主POST处理函数
+// 发送到钉钉的辅助函数
+async function sendToDingTalk(message, source = "未知") {
+  const markdown = {
+    msgtype: "markdown",
+    markdown: {
+      title: `来自 ${source} 的交易通知`,
+      text: message,
+    },
+    at: { isAtAll: false },
+  };
+
+  const resp = await fetch(DINGTALK_WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(markdown),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`钉钉接口返回错误: ${resp.status}`);
+  }
+  
+  return await resp.json();
+}
+
+// 主POST处理函数 - 修复Challenge处理
 export async function POST(req) {
   try {
     const contentType = req.headers.get("content-type") || "";
-    let raw;
-    let isKookWebhook = false;
-    let kookResult = null;
-
-    // 判断是否为KOOK Webhook请求
-    const userAgent = req.headers.get('user-agent') || '';
-    isKookWebhook = userAgent.includes('Kook') || contentType.includes('application/json');
+    
+    console.log("收到请求:", {
+      contentType,
+      url: req.url,
+      method: req.method
+    });
 
     if (contentType.includes("application/json")) {
-      const json = await req.json();
+      const body = await req.json();
       
-      // 如果是KOOK Webhook请求
-      if (isKookWebhook) {
-        kookResult = handleKookWebhook(json);
+      console.log("请求体类型:", body.type);
+      console.log("完整请求体:", JSON.stringify(body, null, 2));
+      
+      // 首先检查是否是KOOK的Challenge请求
+      if (body.type === 255 && body.challenge) {
+        console.log("识别为KOOK Challenge请求");
         
-        // 处理验证请求
-        if (kookResult.challenge) {
-          return NextResponse.json({ challenge: kookResult.challenge });
+        try {
+          const challengeResult = handleKookChallenge(body);
+          console.log("返回Challenge响应:", challengeResult);
+          
+          // 直接返回Challenge响应，不进行其他处理
+          return NextResponse.json(challengeResult);
+        } catch (error) {
+          console.error("Challenge处理失败:", error);
+          return NextResponse.json(
+            { error: "Challenge verification failed" },
+            { status: 403 }
+          );
+        }
+      }
+      
+      // 处理KOOK普通消息
+      if (body.type === 1) {
+        console.log("识别为KOOK普通消息");
+        
+        try {
+          const kookResult = handleKookMessage(body);
+          
+          if (kookResult.shouldForwardToDingTalk) {
+            // 转发到钉钉
+            await sendToDingTalk(kookResult.formattedMessage, "KOOK");
+          }
+          
+          return NextResponse.json({ 
+            code: 0, 
+            message: "KOOK消息处理完成",
+            source: "kook"
+          });
+        } catch (error) {
+          console.error("KOOK消息处理失败:", error);
+          return NextResponse.json(
+            { error: "KOOK message processing failed" },
+            { status: 500 }
+          );
+        }
+      }
+      
+      // 处理普通钉钉消息（原有逻辑）
+      console.log("识别为普通消息");
+      let raw = typeof body === "string"
+        ? body
+        : body?.message || body?.text || body?.content || JSON.stringify(body || {});
+
+      // 预处理原始消息
+      let processedRaw = String(raw || "")
+        .replace(/\\u[\dA-Fa-f]{4}/g, '')
+        .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')
+        .replace(/[^\x00-\x7F\u4e00-\u9fa5\s]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      console.log("处理后的消息:", processedRaw);
+
+      const formattedMessage = formatForDingTalk(processedRaw);
+
+      // 判断是否需要图片
+      let needImage = false;
+      let imageParams = null;
+
+      if (isTP1(processedRaw) || isTP2(processedRaw) || isBreakeven(processedRaw)) {
+        needImage = true;
+        
+        const symbol = getSymbol(processedRaw);
+        const direction = getDirection(processedRaw);
+        const entryPrice = getNum(processedRaw, "开仓价格");
+        
+        let triggerPrice = null;
+        if (isTP1(processedRaw)) {
+          triggerPrice = getNum(processedRaw, "TP1价格") || getNum(processedRaw, "TP1");
+        } else if (isTP2(processedRaw)) {
+          triggerPrice = getNum(processedRaw, "TP2价格") || getNum(processedRaw, "TP2");
+        } else if (isBreakeven(processedRaw)) {
+          triggerPrice = getNum(processedRaw, "保本位");
+        }
+
+        const profitPercent = extractProfitPctFromText(processedRaw) ||
+          (entryPrice && triggerPrice ? calcAbsProfitPct(entryPrice, triggerPrice) : null);
+
+        const pad = (n) => (n < 10 ? "0" + n : "" + n);
+        const now = new Date();
+        const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+          now.getDate()
+        )} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(
+          now.getSeconds()
+        )}`;
+
+        let status = "INFO";
+        if (isTP1(processedRaw)) status = "TP1";
+        if (isTP2(processedRaw)) status = "TP2";
+        if (isBreakeven(processedRaw)) status = "BREAKEVEN";
+
+        imageParams = {
+          status,
+          symbol,
+          direction,
+          price: triggerPrice,
+          entry: entryPrice,
+          profit: profitPercent,
+          time: ts
+        };
+      }
+
+      // 使用中继服务发送消息
+      if (USE_RELAY_SERVICE) {
+        console.log("使用中继服务发送消息...");
+
+        const relayPayload = {
+          message: formattedMessage,
+          needImage,
+          imageParams,
+          dingtalkWebhook: DINGTALK_WEBHOOK
+        };
+
+        const relayResponse = await fetch(RELAY_SERVICE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(relayPayload),
+        });
+
+        const relayData = await relayResponse.json();
+        
+        if (!relayData.success) {
+          throw new Error(relayData.error || "中继服务返回错误");
         }
         
-        // 如果需要转发到钉钉，使用KOOK处理后的消息
-        if (kookResult.shouldForwardToDingTalk) {
-          raw = kookResult.formattedMessage;
-        } else {
-          return NextResponse.json({ code: 0, message: "KOOK事件处理完成" });
-        }
+        return NextResponse.json({ 
+          ok: true, 
+          relayData, 
+          method: "relay",
+          source: "direct" 
+        });
       } else {
-        // 原有钉钉消息处理逻辑
-        raw = typeof json === "string"
-          ? json
-          : json?.message || json?.text || json?.content || JSON.stringify(json || {});
+        // 直接发送到钉钉
+        await sendToDingTalk(formattedMessage, "直接消息");
+        
+        return NextResponse.json({ 
+          ok: true, 
+          method: "direct",
+          source: "direct" 
+        });
       }
-    } else {
-      raw = await req.text();
     }
-
-    // 预处理原始消息
-    let processedRaw = String(raw || "")
-      .replace(/\\u[\dA-Fa-f]{4}/g, '')
-      .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')
-      .replace(/[^\x00-\x7F\u4e00-\u9fa5\s]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    console.log("处理后的消息:", processedRaw);
-
-    const formattedMessage = isKookWebhook && kookResult ? 
-      raw : // KOOK消息已经格式化过
-      formatForDingTalk(processedRaw); // 钉钉消息需要重新格式化
-
-    // 判断是否需要图片
-    let needImage = false;
-    let imageParams = null;
-
-    if (isTP1(processedRaw) || isTP2(processedRaw) || isBreakeven(processedRaw)) {
-      needImage = true;
-
-      const symbol = getSymbol(processedRaw);
-      const direction = getDirection(processedRaw);
-      const entryPrice = getNum(processedRaw, "开仓价格");
-      
-      let triggerPrice = null;
-      if (isTP1(processedRaw)) {
-        triggerPrice = getNum(processedRaw, "TP1价格") || getNum(processedRaw, "TP1");
-      } else if (isTP2(processedRaw)) {
-        triggerPrice = getNum(processedRaw, "TP2价格") || getNum(processedRaw, "TP2");
-      } else if (isBreakeven(processedRaw)) {
-        triggerPrice = getNum(processedRaw, "保本位");
-      }
-
-      const profitPercent = extractProfitPctFromText(processedRaw) ||
-        (entryPrice && triggerPrice ? calcAbsProfitPct(entryPrice, triggerPrice) : null);
-
-      const pad = (n) => (n < 10 ? "0" + n : "" + n);
-      const now = new Date();
-      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
-        now.getDate()
-      )} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(
-        now.getSeconds()
-      )}`;
-
-      let status = "INFO";
-      if (isTP1(processedRaw)) status = "TP1";
-      if (isTP2(processedRaw)) status = "TP2";
-      if (isBreakeven(processedRaw)) status = "BREAKEVEN";
-
-      imageParams = {
-        status,
-        symbol,
-        direction,
-        price: triggerPrice,
-        entry: entryPrice,
-        profit: profitPercent,
-        time: ts
-      };
-    }
-
-    // 使用中继服务发送消息
-    if (USE_RELAY_SERVICE) {
-      console.log("使用中继服务发送消息...");
-
-      const relayPayload = {
-        message: formattedMessage,
-        needImage,
-        imageParams,
-        dingtalkWebhook: DINGTALK_WEBHOOK
-      };
-
-      console.log("中继服务请求负载:", relayPayload);
-
-      const relayResponse = await fetch(RELAY_SERVICE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(relayPayload),
-      });
-
-      const relayData = await relayResponse.json();
-      console.log("中继服务响应:", relayData);
-      
-      if (!relayData.success) {
-        throw new Error(relayData.error || "中继服务返回错误");
-      }
-      
-      return NextResponse.json({ ok: true, relayData, method: "relay", source: isKookWebhook ? "kook" : "direct" });
-    } else {
-      // 直接发送到钉钉
-      console.log("直接发送到钉钉...");
-      
-      const markdown = {
-        msgtype: "markdown",
-        markdown: {
-          title: isKookWebhook ? "KOOK交易通知" : "交易通知",
-          text: formattedMessage,
-        },
-        at: { isAtAll: false },
-      };
-
-      console.log("发送的消息内容:", markdown.markdown.text);
-
-      const resp = await fetch(DINGTALK_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(markdown),
-      });
-
-      const data = await resp.json().catch(() => ({}));
-      console.log("钉钉响应:", data);
-      
-      return NextResponse.json({ 
-        ok: true, 
-        dingTalk: data, 
-        method: "direct",
-        source: isKookWebhook ? "kook" : "direct" 
-      });
-    }
-  } catch (e) {
-    console.error(e);
+    
+    return NextResponse.json({ error: "Invalid content type" }, { status: 400 });
+    
+  } catch (error) {
+    console.error("处理错误:", error);
     return NextResponse.json(
-      { ok: false, error: String(e?.message || e) },
+      { 
+        ok: false, 
+        error: String(error?.message || error),
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      },
       { status: 500 }
     );
   }
 }
 
-// GET请求用于测试
+// GET请求用于测试和调试
 export async function GET(req) {
   const url = new URL(req.url);
-  const isKookTest = url.searchParams.has('kook-test');
+  const action = url.searchParams.get('action');
   
-  if (isKookTest) {
+  // 测试KOOK验证
+  if (action === 'test-kook-challenge') {
+    const testChallenge = "test_challenge_12345";
+    
     return NextResponse.json({
-      message: "KOOK Webhook 测试成功",
-      timestamp: new Date().toISOString(),
-      beijingTime: getBeijingTime(),
-      verifyTokenConfigured: !!KOOK_VERIFY_TOKEN,
-      botTokenConfigured: !!KOOK_BOT_TOKEN
+      message: "KOOK Challenge 测试",
+      verify_token_configured: !!KOOK_VERIFY_TOKEN,
+      test_challenge: testChallenge,
+      expected_response: { challenge: testChallenge },
+      verify_token_masked: KOOK_VERIFY_TOKEN ? "***" + KOOK_VERIFY_TOKEN.slice(-4) : "未设置"
     });
   }
   
+  // 健康检查
   return NextResponse.json({
-    message: "服务运行正常",
-    supported: ["dingtalk", "kook"],
+    status: "ok",
+    service: "消息转发服务",
+    supported_platforms: ["dingtalk", "kook"],
     timestamp: new Date().toISOString(),
-    beijingTime: getBeijingTime()
+    beijingTime: getBeijingTime(),
+    environment: process.env.NODE_ENV,
+    kook_configured: !!(KOOK_VERIFY_TOKEN && KOOK_BOT_TOKEN),
+    dingtalk_configured: !!DINGTALK_WEBHOOK
   });
 }
