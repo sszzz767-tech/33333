@@ -16,6 +16,9 @@ const USE_RELAY_SERVICE = process.env.USE_RELAY_SERVICE === "true"; // 设置为
 // 控制是否发送到KOOK的开关
 const SEND_TO_KOOK = process.env.SEND_TO_KOOK === "true"; // 设置为 "true" 启用KOOK发送
 
+// 默认KOOK频道ID
+const DEFAULT_KOOK_CHANNEL_ID = process.env.DEFAULT_KOOK_CHANNEL_ID || "9709510381680957";
+
 const lastEntryBySymbol = Object.create(null);
 
 // 获取北京时间函数
@@ -304,7 +307,7 @@ function simplifyEmojis(text) {
     .replace(/\\u2728/g, dingtalkEmojis["✨"]); // ✨
 }
 
-// 新增：发送到腾讯云函数（KOOK）的函数
+// 新增：发送到腾讯云函数（KOOK）的函数 - 增强日志版本
 async function sendToKook(messageData, rawData, messageType) {
   if (!SEND_TO_KOOK) {
     console.log("KOOK发送未启用，跳过");
@@ -312,28 +315,24 @@ async function sendToKook(messageData, rawData, messageType) {
   }
 
   try {
-    console.log("准备发送到腾讯云KOOK服务...");
+    console.log("=== 开始发送到腾讯云KOOK服务 ===");
+    console.log("腾讯云函数URL:", TENCENT_CLOUD_KOOK_URL);
+    console.log("消息类型:", messageType);
+    console.log("格式化消息长度:", messageData.length);
+    console.log("原始数据预览:", rawData.substring(0, 200) + (rawData.length > 200 ? "..." : ""));
     
+    // 简化请求体，只发送必要信息
     const kookPayload = {
-      // 原始数据
-      rawData: rawData,
-      // 格式化后的消息
-      formattedMessage: messageData,
-      // 消息类型
+      channelId: DEFAULT_KOOK_CHANNEL_ID,
+      message: messageData,
       messageType: messageType,
-      // 时间戳
       timestamp: Date.now(),
-      // 交易信息
-      tradingInfo: {
-        symbol: getSymbol(rawData),
-        direction: getDirection(rawData),
-        entryPrice: getNum(rawData, "开仓价格"),
-        triggerPrice: getNum(rawData, "平仓价格") || getNum(rawData, "触发价格"),
-        profitPercent: extractProfitPctFromText(rawData)
-      }
+      // 可选：添加一些交易信息用于调试
+      symbol: getSymbol(rawData),
+      direction: getDirection(rawData)
     };
 
-    console.log("KOOK请求负载:", kookPayload);
+    console.log("KOOK请求负载:", JSON.stringify(kookPayload, null, 2));
 
     const response = await fetch(TENCENT_CLOUD_KOOK_URL, {
       method: "POST",
@@ -341,12 +340,15 @@ async function sendToKook(messageData, rawData, messageType) {
         "Content-Type": "application/json",
         "User-Agent": "Tradingview-Vercel-Bot/1.0"
       },
-      body: JSON.stringify(kookPayload),
-      timeout: 10000 // 10秒超时
+      body: JSON.stringify(kookPayload)
     });
 
+    console.log("腾讯云响应状态:", response.status);
+    
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      const errorText = await response.text();
+      console.error("腾讯云响应错误:", errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
 
     const result = await response.json();
@@ -618,6 +620,8 @@ function formatForDingTalk(raw) {
 // -------- App Router Handler (POST only) --------
 export async function POST(req) {
   try {
+    console.log("=== 收到TradingView Webhook请求 ===");
+    
     const contentType = req.headers.get("content-type") || "";
     let raw;
 
@@ -631,6 +635,8 @@ export async function POST(req) {
       raw = await req.text();
     }
 
+    console.log("原始请求数据:", raw.substring(0, 500) + (raw.length > 500 ? "..." : ""));
+
     // 对原始消息进行预处理，保留中文但删除乱码
     let processedRaw = String(raw || "")
       .replace(/\\u[\dA-Fa-f]{4}/g, '')
@@ -643,6 +649,9 @@ export async function POST(req) {
 
     const formattedMessage = formatForDingTalk(processedRaw);
     const messageType = getMessageType(processedRaw);
+
+    console.log("消息类型:", messageType);
+    console.log("格式化消息预览:", formattedMessage.substring(0, 200) + (formattedMessage.length > 200 ? "..." : ""));
 
     // 判断是否需要图片
     let needImage = false;
@@ -690,12 +699,18 @@ export async function POST(req) {
         profit: profitPercent,
         time: ts
       };
+      
+      console.log("需要图片，图片参数:", imageParams);
     }
 
     // 并行发送到钉钉和KOOK
+    console.log("=== 开始并行发送消息 ===");
+    
     const [dingtalkResult, kookResult] = await Promise.allSettled([
       // 发送到钉钉（原有逻辑）
       (async () => {
+        console.log("开始发送到钉钉...");
+        
         if (USE_RELAY_SERVICE) {
           console.log("使用中继服务发送消息到钉钉...");
 
@@ -751,7 +766,10 @@ export async function POST(req) {
       })(),
 
       // 发送到KOOK（新增功能）
-      sendToKook(formattedMessage, processedRaw, messageType)
+      (async () => {
+        console.log("开始发送到KOOK...");
+        return await sendToKook(formattedMessage, processedRaw, messageType);
+      })()
     ]);
 
     // 处理结果
@@ -760,7 +778,9 @@ export async function POST(req) {
       kook: kookResult.status === 'fulfilled' ? kookResult.value : { error: kookResult.reason?.message }
     };
 
-    console.log("最终发送结果:", results);
+    console.log("=== 最终发送结果 ===");
+    console.log("钉钉结果:", results.dingtalk);
+    console.log("KOOK结果:", results.kook);
 
     return NextResponse.json({ 
       ok: true, 
@@ -768,7 +788,7 @@ export async function POST(req) {
       method: USE_RELAY_SERVICE ? "relay" : "direct"
     });
   } catch (e) {
-    console.error(e);
+    console.error("处理请求时发生错误:", e);
     return NextResponse.json(
       { ok: false, error: String(e?.message || e) },
       { status: 500 }
