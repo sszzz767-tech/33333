@@ -1,56 +1,21 @@
 import { NextResponse } from "next/server";
 
-// 环境变量配置
-const DINGTALK_WEBHOOK = process.env.DINGTALK_WEBHOOK;
-const KOOK_VERIFY_TOKEN = process.env.KOOK_VERIFY_TOKEN;
-const KOOK_BOT_TOKEN = process.env.KOOK_BOT_TOKEN;
+const DINGTALK_WEBHOOK =
+  process.env.DINGTALK_WEBHOOK ||
+  "https://oapi.dingtalk.com/robot/send?access_token=a117def1fa7a3531c5d4e2c008842a571256cfec79cde5d5afbc2e20b668f344";
 
-console.log("KOOK环境变量状态:", {
-  verifyToken: KOOK_VERIFY_TOKEN ? "已设置" : "未设置",
-  botToken: KOOK_BOT_TOKEN ? "已设置" : "未设置"
-});
+// 中继服务地址 - 替换成你的函数计算地址！
+const RELAY_SERVICE_URL = process.env.RELAY_SERVICE_URL || "https://send-todingtalk-pnvjfgztkw.cn-hangzhou.fcapp.run";
 
-// 专门处理KOOK Challenge的简化函数
-function handleKookChallengeSimplified(body) {
-  console.log("=== KOOK Challenge 详细日志 ===");
-  console.log("收到Challenge请求");
-  console.log("Body type:", body.type);
-  console.log("Challenge值:", body.challenge);
-  console.log("收到的Verify Token:", body.verify_token);
-  console.log("期望的Verify Token:", KOOK_VERIFY_TOKEN);
-  console.log("Token匹配:", body.verify_token === KOOK_VERIFY_TOKEN);
-  
-  // 严格验证
-  if (!body.verify_token) {
-    throw new Error("KOOK请求中缺少verify_token");
-  }
-  
-  if (!KOOK_VERIFY_TOKEN) {
-    throw new Error("环境变量KOOK_VERIFY_TOKEN未设置");
-  }
-  
-  if (body.verify_token !== KOOK_VERIFY_TOKEN) {
-    console.error("Token不匹配详情:");
-    console.error("收到的长度:", body.verify_token.length);
-    console.error("期望的长度:", KOOK_VERIFY_TOKEN.length);
-    console.error("收到的内容:", body.verify_token);
-    console.error("期望的内容:", KOOK_VERIFY_TOKEN);
-    throw new Error("Verify Token不匹配");
-  }
-  
-  if (!body.challenge) {
-    throw new Error("KOOK请求中缺少challenge值");
-  }
-  
-  console.log("Challenge验证成功，返回:", { challenge: body.challenge });
-  return { challenge: body.challenge };
-}
+// 控制是否使用中继服务的开关
+const USE_RELAY_SERVICE = process.env.USE_RELAY_SERVICE === "true"; // 设置为 "true" 启用中继
 
-// 你原有的所有辅助函数 - 保持完全不变
 const lastEntryBySymbol = Object.create(null);
 
+// 获取北京时间函数
 function getBeijingTime() {
   const now = new Date();
+  // 北京时间是UTC+8
   const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   
   const year = beijingTime.getUTCFullYear();
@@ -82,57 +47,64 @@ function getStr(text, key) {
 
 function getSymbol(text) {
   const symbol = getStr(text, "品种");
+  // 清理符号，只保留交易对部分
   return symbol ? symbol.split(' ')[0].replace(/[^a-zA-Z0-9.]/g, '') : null;
 }
 
 function getDirection(text) {
   const direction = getStr(text, "方向");
+  // 清理方向，只保留"多头"或"空头"
   return direction ? direction.replace(/[^多头空头]/g, '') : null;
 }
 
+// 智能格式化价格，根据原始数据的小数位数显示，最多5位，最少2位
 function formatPriceSmart(value) {
   if (value === null || value === undefined) return "-";
   
+  // 如果是字符串，直接使用
   if (typeof value === 'string') {
+    // 检查字符串中的小数位数
     const decimalIndex = value.indexOf('.');
     if (decimalIndex === -1) {
-      return value + ".00";
+      return value + ".00"; // 没有小数部分，添加两位小数
     }
     
     const decimalPart = value.substring(decimalIndex + 1);
     const decimalLength = decimalPart.length;
     
     if (decimalLength === 0) {
-      return value + "00";
+      return value + "00"; // 只有小数点，添加两位小数
     } else if (decimalLength === 1) {
-      return value + "0";
+      return value + "0"; // 只有一位小数，补零
     } else if (decimalLength > 5) {
+      // 超过5位小数，截断到5位，但保留原始字符串的精度
       const integerPart = value.substring(0, decimalIndex);
       return integerPart + '.' + decimalPart.substring(0, 5);
     }
     
-    return value;
+    return value; // 2-5位小数，直接返回
   }
   
+  // 如果是数字，转换为字符串处理
   const strValue = value.toString();
   const decimalIndex = strValue.indexOf('.');
   
   if (decimalIndex === -1) {
-    return strValue + ".00";
+    return strValue + ".00"; // 没有小数部分，添加两位小数
   }
   
   const decimalPart = strValue.substring(decimalIndex + 1);
   const decimalLength = decimalPart.length;
   
   if (decimalLength === 0) {
-    return strValue + "00";
+    return strValue + "00"; // 只有小数点，添加两位小数
   } else if (decimalLength === 1) {
-    return strValue + "0";
+    return strValue + "0"; // 只有一位小数，补零
   } else if (decimalLength > 5) {
-    return value.toFixed(5);
+    return value.toFixed(5); // 超过5位小数，截断到5位
   }
   
-  return strValue;
+  return strValue; // 2-5位小数，直接返回
 }
 
 function calcAbsProfitPct(entry, target) {
@@ -141,6 +113,7 @@ function calcAbsProfitPct(entry, target) {
   return Math.abs(pct);
 }
 
+// 检测函数
 function isTP2(t) {
   return /TP2达成/.test(t);
 }
@@ -175,17 +148,21 @@ function extractProfitPctFromText(t) {
   return m ? Number(m[2]) : null;
 }
 
+// 胜率调整函数
 function adjustWinRate(winRate) {
   if (winRate === null || winRate === undefined) return null;
+  // 将胜率增加3%，但不超过100%
   const adjusted = Math.min(100, winRate + 3);
   return parseFloat(adjusted.toFixed(2));
 }
 
+// 移除重复内容的函数 - 增强版
 function removeDuplicateLines(text) {
   const lines = text.split('\n');
   const seen = new Set();
   const result = [];
   
+  // 提取关键信息，避免重复
   let hasSymbol = false;
   let hasDirection = false;
   let hasEntryPrice = false;
@@ -200,8 +177,10 @@ function removeDuplicateLines(text) {
   for ( const line of lines) {
     const trimmed = line.trim();
     
+    // 跳过空行
     if (!trimmed) continue;
     
+    // 检查是否重复的关键信息
     const isSymbolLine = /品种\s*[:：]/.test(trimmed);
     const isDirectionLine = /方向\s*[:：]/.test(trimmed);
     const isEntryPriceLine = /开仓价格\s*[:：]/.test(trimmed);
@@ -213,6 +192,7 @@ function removeDuplicateLines(text) {
     const isLeverageLine = /杠杆倍数\s*[:：]/.test(trimmed);
     const isProfitLine = /盈利\s*[:：]/.test(trimmed);
     
+    // 如果已经见过这种类型的信息，跳过
     if ((isSymbolLine && hasSymbol) || 
         (isDirectionLine && hasDirection) || 
         (isEntryPriceLine && hasEntryPrice) || 
@@ -226,6 +206,7 @@ function removeDuplicateLines(text) {
       continue;
     }
     
+    // 标记已见到的信息类型
     if (isSymbolLine) hasSymbol = true;
     if (isDirectionLine) hasDirection = true;
     if (isEntryPriceLine) hasEntryPrice = true;
@@ -237,6 +218,7 @@ function removeDuplicateLines(text) {
     if (isLeverageLine) hasLeverage = true;
     if (isProfitLine) hasProfit = true;
     
+    // 添加到结果
     if (trimmed && !seen.has(trimmed)) {
       seen.add(trimmed);
       result.push(line);
@@ -246,6 +228,7 @@ function removeDuplicateLines(text) {
   return result.join('\n');
 }
 
+// 提取仓位信息的函数
 function extractPositionInfo(text) {
   const positionMatch = text.match(/开仓\s*(\d+(?:\.\d+)?)%\s*仓位/);
   const leverageMatch = text.match(/杠杆倍数\s*[:：]\s*(\d+)x/);
@@ -258,9 +241,11 @@ function extractPositionInfo(text) {
   };
 }
 
+// 生成图片URL的函数 (保留用于直接发送)
 function generateImageURL(params) {
   const { status, symbol, direction, price, entry, profit, time, BASE } = params;
   
+  // 清理参数，确保URL正确
   const cleanSymbol = symbol ? symbol.replace(/[^a-zA-Z0-9.]/g, '') : '';
   const cleanDirection = direction ? direction.replace(/[^多头空头]/g, '') : '';
   
@@ -277,6 +262,7 @@ function generateImageURL(params) {
   return `${BASE}/api/card-image?${qs}`;
 }
 
+// 钉钉支持的简单表情符号映射
 const dingtalkEmojis = {
   "✅": "✅",
   "🎯": "🎯",
@@ -293,32 +279,35 @@ const dingtalkEmojis = {
   "✨": "✨"
 };
 
+// 替换复杂的表情符号为钉钉支持的简单表情
 function simplifyEmojis(text) {
   return text
-    .replace(/\\uD83C\\uDFAF/g, dingtalkEmojis["🎯"])
-    .replace(/\\uD83D\\uDFE1/g, dingtalkEmojis["🟡"])
-    .replace(/\\uD83D\\uDFE2/g, dingtalkEmojis["🟢"])
-    .replace(/\\uD83D\\uDD34/g, dingtalkEmojis["🔴"])
-    .replace(/\\uD83D\\uDC4D/g, dingtalkEmojis["✅"])
-    .replace(/\\u2705/g, dingtalkEmojis["✅"])
-    .replace(/\\uD83D\\uDCC8/g, dingtalkEmojis["📈"])
-    .replace(/\\uD83D\\uDCCA/g, dingtalkEmojis["📊"])
-    .replace(/\\u26A0\\uFE0F/g, dingtalkEmojis["⚠️"])
-    .replace(/\\uD83D\\uDD04/g, dingtalkEmojis["🔄"])
-    .replace(/\\u2696\\uFE0F/g, dingtalkEmojis["⚖️"])
-    .replace(/\\uD83D\\uDCB0/g, dingtalkEmojis["💰"])
-    .replace(/\\uD83C\\uDF89/g, dingtalkEmojis["🎉"])
-    .replace(/\\u2728/g, dingtalkEmojis["✨"]);
+    .replace(/\\uD83C\\uDFAF/g, dingtalkEmojis["🎯"]) // 🎯
+    .replace(/\\uD83D\\uDFE1/g, dingtalkEmojis["🟡"]) // 🟡
+    .replace(/\\uD83D\\uDFE2/g, dingtalkEmojis["🟢"]) // 🟢
+    .replace(/\\uD83D\\uDD34/g, dingtalkEmojis["🔴"]) // 🔴
+    .replace(/\\uD83D\\uDC4D/g, dingtalkEmojis["✅"]) // 👍 -> ✅
+    .replace(/\\u2705/g, dingtalkEmojis["✅"]) // ✅
+    .replace(/\\uD83D\\uDCC8/g, dingtalkEmojis["📈"]) // 📈
+    .replace(/\\uD83D\\uDCCA/g, dingtalkEmojis["📊"]) // 📊
+    .replace(/\\u26A0\\uFE0F/g, dingtalkEmojis["⚠️"]) // ⚠️
+    .replace(/\\uD83D\\uDD04/g, dingtalkEmojis["🔄"]) // 🔄
+    .replace(/\\u2696\\uFE0F/g, dingtalkEmojis["⚖️"]) // ⚖️
+    .replace(/\\uD83D\\uDCB0/g, dingtalkEmojis["💰"]) // 💰
+    .replace(/\\uD83C\\uDF89/g, dingtalkEmojis["🎉"]) // 🎉
+    .replace(/\\u2728/g, dingtalkEmojis["✨"]); // ✨
 }
 
 function formatForDingTalk(raw) {
+  // 首先清理所有可能的乱码，但保留中文和基本表情
   let text = String(raw || "")
-    .replace(/\\u[\dA-Fa-f]{4}/g, '')
-    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')
-    .replace(/[^\x00-\x7F\u4e00-\u9fa5\s]/g, '')
+    .replace(/\\u[\dA-Fa-f]{4}/g, '')  // 删除Unicode转义序列
+    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')  // 删除代理对（复杂表情符号）
+    .replace(/[^\x00-\x7F\u4e00-\u9fa5\s]/g, '')  // 只保留ASCII、中文和空格
     .replace(/\s+/g, ' ')
     .trim();
 
+  // 移除重复行
   text = removeDuplicateLines(text);
 
   const header = "🤖 无限区块AI 🤖\n\n";
@@ -336,6 +325,7 @@ function formatForDingTalk(raw) {
       ? lastEntryBySymbol[symbol].entry
       : null;
 
+  // 获取触发价格（平仓价格）
   const triggerPrice = 
     getNum(text, "平仓价格") || 
     getNum(text, "触发价格") || 
@@ -346,14 +336,17 @@ function formatForDingTalk(raw) {
     getNum(text, "保本位") || 
     null;
 
+  // 提取盈利百分比
   let profitPercent = extractProfitPctFromText(text);
   
   if (isEntry(text) && symbol && entryFromText != null) {
     lastEntryBySymbol[symbol] = { entry: entryFromText, t: Date.now() };
   }
 
+  // 获取BASE URL - 使用固定值确保正确
   const BASE = "https://nextjs-boilerplate-ochre-nine-90.vercel.app";
 
+  // ===== 展示逻辑修改 =====
   if (isTP2(text)) {
     if (profitPercent == null && entryPrice != null && triggerPrice != null) {
       profitPercent = calcAbsProfitPct(entryPrice, triggerPrice);
@@ -366,10 +359,14 @@ function formatForDingTalk(raw) {
       `💰 开仓价格: ${formatPriceSmart(entryPrice)}\n\n` +
       (triggerPrice ? `🎯 TP2价格: ${formatPriceSmart(triggerPrice)}\n\n` : "") +
       `📈 盈利: ${profitPercent != null ? Math.round(profitPercent) : "-"}%\n\n` +
+      // 删除了累计盈利的显示
       "✅ 已完全清仓\n\n";
 
+    // 在TP2消息中附加图片
     try {
+      // 直接使用触发价格而不是最新价格
       const latest = triggerPrice;
+      
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
@@ -404,9 +401,13 @@ function formatForDingTalk(raw) {
       `💰 开仓价格: ${formatPriceSmart(entryPrice)}\n\n` +
       (triggerPrice ? `🎯 TP1价格: ${formatPriceSmart(triggerPrice)}\n\n` : "") +
       `📈 盈利: ${profitPercent != null ? Math.round(profitPercent) : "-"}%\n\n`;
+      // 删除了累计盈利的显示
 
+    // 在TP1消息中附加图片
     try {
+      // 直接使用触发价格而不是最新价格
       const latest = triggerPrice;
+      
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
@@ -431,10 +432,13 @@ function formatForDingTalk(raw) {
       console.error("生成图片时出错:", error);
     }
   } else if (isBreakeven(text)) {
+    // 提取仓位信息
     const positionInfo = extractPositionInfo(text);
     
+    // 提取盈利百分比 - 从消息中获取实际盈利值
     let actualProfitPercent = extractProfitPctFromText(text);
     if (actualProfitPercent === null && entryPrice !== null && triggerPrice !== null) {
+      // 如果没有提取到盈利百分比，计算实际盈利
       actualProfitPercent = calcAbsProfitPct(entryPrice, triggerPrice);
     }
     
@@ -449,8 +453,11 @@ function formatForDingTalk(raw) {
       (actualProfitPercent !== null ? `📈 盈利: ${actualProfitPercent.toFixed(2)}%\n\n` : "") +
       "⚠️ 请把止损移到开仓位置（保本）\n\n";
 
+    // 为保本位置消息附加图片
     try {
+      // 直接使用触发价格而不是最新价格
       const latest = triggerPrice;
+      
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
       const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
@@ -483,6 +490,7 @@ function formatForDingTalk(raw) {
       "🔄 系统操作: 清仓保护\n\n" +
       "✅ 风险状态: 已完全转移\n\n";
   } else if (isInitialStop(text)) {
+    // 提取初始止损相关信息
     const triggerPrice = getNum(text, "触发价格");
     
     body =
@@ -497,8 +505,10 @@ function formatForDingTalk(raw) {
     const win = getNum(text, "胜率");
     const trades = getNum(text, "交易次数");
     
+    // 调整胜率显示（增加3%）
     const adjustedWin = adjustWinRate(win);
 
+    // 获取TP1、TP2和保本位价格
     const tp1Price = getNum(text, "TP1");
     const tp2Price = getNum(text, "TP2");
     const breakevenPrice = getNum(text, "保本位");
@@ -520,189 +530,31 @@ function formatForDingTalk(raw) {
     body = toLines(text).replace(/\n/g, "\n\n");
   }
 
+  // 在所有消息末尾添加北京时间
   const beijingTime = getBeijingTime();
   body += `\n⏰ 北京时间: ${beijingTime}\n`;
 
+  // 简化表情符号以确保钉钉兼容性
   return simplifyEmojis(header + body);
 }
 
-// 发送消息到KOOK的辅助函数
-async function sendKookMessage(channelId, content) {
-  if (!KOOK_BOT_TOKEN) {
-    console.log("KOOK_BOT_TOKEN未设置，跳过发送消息");
-    return;
-  }
-  
-  try {
-    const response = await fetch("https://www.kookapp.cn/api/v3/message/create", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bot ${KOOK_BOT_TOKEN}`
-      },
-      body: JSON.stringify({
-        target_id: channelId,
-        content: content,
-        type: 1
-      })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`KOOK API错误: ${response.status}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error("发送KOOK消息失败:", error);
-  }
-}
-
-// 发送到钉钉的辅助函数
-async function sendToDingTalk(message, source = "未知") {
-  if (!DINGTALK_WEBHOOK) {
-    console.log("DINGTALK_WEBHOOK未设置，跳过发送消息");
-    return;
-  }
-  
-  const markdown = {
-    msgtype: "markdown",
-    markdown: {
-      title: `来自 ${source} 的交易通知`,
-      text: message,
-    },
-    at: { isAtAll: false },
-  };
-
-  try {
-    const resp = await fetch(DINGTALK_WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(markdown),
-    });
-
-    if (!resp.ok) {
-      throw new Error(`钉钉接口返回错误: ${resp.status}`);
-    }
-    
-    return await resp.json();
-  } catch (error) {
-    console.error("发送到钉钉失败:", error);
-  }
-}
-
-// 主POST处理函数 - 专门优化KOOK Challenge
+// -------- App Router Handler (POST only) --------
 export async function POST(req) {
-  let body;
-  
   try {
     const contentType = req.headers.get("content-type") || "";
-    console.log("收到POST请求:", {
-      contentType: contentType,
-      url: req.url,
-      method: req.method
-    });
+    let raw;
 
-    // 只处理JSON内容
-    if (!contentType.includes("application/json")) {
-      console.log("非JSON请求，返回400");
-      return NextResponse.json(
-        { error: "只支持application/json内容类型" },
-        { status: 400 }
-      );
+    if (contentType.includes("application/json")) {
+      const json = await req.json();
+      raw =
+        typeof json === "string"
+          ? json
+          : json?.message || json?.text || json?.content || JSON.stringify(json || {});
+    } else {
+      raw = await req.text();
     }
 
-    // 解析请求体
-    try {
-      body = await req.json();
-      console.log("请求体解析成功，类型:", body.type);
-    } catch (parseError) {
-      console.error("请求体解析失败:", parseError);
-      return NextResponse.json(
-        { error: "无效的JSON格式" },
-        { status: 400 }
-      );
-    }
-
-    // 专门处理KOOK Challenge请求 (type 255)
-    if (body.type === 255) {
-      console.log("识别为KOOK Challenge请求");
-      
-      try {
-        const result = handleKookChallengeSimplified(body);
-        console.log("Challenge处理成功，返回响应");
-        
-        // 立即返回响应，避免任何延迟
-        return NextResponse.json(result, {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type'
-          }
-        });
-      } catch (challengeError) {
-        console.error("Challenge处理失败:", challengeError.message);
-        return NextResponse.json(
-          { 
-            error: "Challenge验证失败",
-            details: challengeError.message
-          },
-          { 
-            status: 403,
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-      }
-    }
-
-    // 处理KOOK普通消息 (type 1)
-    if (body.type === 1) {
-      console.log("识别为KOOK普通消息");
-      
-      try {
-        let messageContent = body.content;
-        const channelId = body.target_id;
-        
-        console.log("KOOK消息内容:", messageContent);
-        
-        // 移除@机器人的标记
-        if (messageContent.includes('(met)') && messageContent.includes('(met)')) {
-          messageContent = messageContent.replace(/\(met\)[^()]*\(met\)/g, '').trim();
-        }
-        
-        // 使用现有的格式化函数
-        const formattedMessage = formatForDingTalk(messageContent);
-        
-        // 转发到钉钉
-        await sendToDingTalk(formattedMessage, "KOOK");
-        
-        // 在KOOK中回复确认
-        await sendKookMessage(channelId, "✅ 消息已收到并处理");
-        
-        return NextResponse.json({ 
-          code: 0, 
-          message: "KOOK消息处理完成",
-          source: "kook"
-        });
-      } catch (error) {
-        console.error("KOOK消息处理失败:", error);
-        return NextResponse.json(
-          { error: "KOOK消息处理失败" },
-          { status: 500 }
-        );
-      }
-    }
-
-    // 处理普通钉钉消息（原有逻辑）
-    console.log("识别为普通消息");
-    let raw = typeof body === "string"
-      ? body
-      : body?.message || body?.text || body?.content || JSON.stringify(body || {});
-
-    // 预处理原始消息
+    // 对原始消息进行预处理，保留中文但删除乱码
     let processedRaw = String(raw || "")
       .replace(/\\u[\dA-Fa-f]{4}/g, '')
       .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')
@@ -714,71 +566,114 @@ export async function POST(req) {
 
     const formattedMessage = formatForDingTalk(processedRaw);
 
-    // 发送到钉钉
-    await sendToDingTalk(formattedMessage, "直接消息");
-    
-    return NextResponse.json({ 
-      ok: true, 
-      method: "direct",
-      source: "direct" 
-    });
+    // 判断是否需要图片
+    let needImage = false;
+    let imageParams = null;
 
-  } catch (error) {
-    console.error("全局错误处理:", error);
-    return NextResponse.json(
-      { 
-        error: "服务器内部错误",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      },
-      { 
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json'
-        }
+    if (isTP1(processedRaw) || isTP2(processedRaw) || isBreakeven(processedRaw)) {
+      needImage = true;
+
+      const symbol = getSymbol(processedRaw);
+      const direction = getDirection(processedRaw);
+      const entryPrice = getNum(processedRaw, "开仓价格");
+      
+      // 根据消息类型提取正确的触发价格
+      let triggerPrice = null;
+      if (isTP1(processedRaw)) {
+        triggerPrice = getNum(processedRaw, "TP1价格") || getNum(processedRaw, "TP1");
+      } else if (isTP2(processedRaw)) {
+        triggerPrice = getNum(processedRaw, "TP2价格") || getNum(processedRaw, "TP2");
+      } else if (isBreakeven(processedRaw)) {
+        triggerPrice = getNum(processedRaw, "保本位");
       }
+
+      const profitPercent = extractProfitPctFromText(processedRaw) ||
+        (entryPrice && triggerPrice ? calcAbsProfitPct(entryPrice, triggerPrice) : null);
+
+      const pad = (n) => (n < 10 ? "0" + n : "" + n);
+      const now = new Date();
+      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+        now.getDate()
+      )} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(
+        now.getSeconds()
+      )}`;
+
+      let status = "INFO";
+      if (isTP1(processedRaw)) status = "TP1";
+      if (isTP2(processedRaw)) status = "TP2";
+      if (isBreakeven(processedRaw)) status = "BREAKEVEN";
+
+      imageParams = {
+        status,
+        symbol,
+        direction,
+        price: triggerPrice, // 使用触发价格而不是最新价格
+        entry: entryPrice,
+        profit: profitPercent,
+        time: ts
+      };
+    }
+
+    // 使用中继服务发送消息
+    if (USE_RELAY_SERVICE) {
+      console.log("使用中继服务发送消息...");
+
+      // 准备发送到中继服务的请求
+      const relayPayload = {
+        message: formattedMessage,
+        needImage,
+        imageParams,
+        dingtalkWebhook: DINGTALK_WEBHOOK
+      };
+
+      console.log("中继服务请求负载:", relayPayload);
+
+      // 调用中继服务
+      const relayResponse = await fetch(RELAY_SERVICE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(relayPayload),
+      });
+
+      const relayData = await relayResponse.json();
+      console.log("中继服务响应:", relayData);
+      
+      if (!relayData.success) {
+        throw new Error(relayData.error || "中继服务返回错误");
+      }
+      
+      return NextResponse.json({ ok: true, relayData, method: "relay" });
+    } else {
+      // 直接发送到钉钉（原有逻辑）
+      console.log("直接发送到钉钉...");
+      
+      const markdown = {
+        msgtype: "markdown",
+        markdown: {
+          title: "交易通知",
+          text: formattedMessage,
+        },
+        at: { isAtAll: false },
+      };
+
+      console.log("发送的消息内容:", markdown.markdown.text);
+
+      const resp = await fetch(DINGTALK_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(markdown),
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      console.log("钉钉响应:", data);
+      
+      return NextResponse.json({ ok: true, dingTalk: data, method: "direct" });
+    }
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json(
+      { ok: false, error: String(e?.message || e) },
+      { status: 500 }
     );
   }
-}
-
-// 添加OPTIONS方法处理CORS预检请求
-export async function OPTIONS(req) {
-  console.log("处理OPTIONS预检请求");
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-    }
-  });
-}
-
-// GET请求用于测试
-export async function GET(req) {
-  const url = new URL(req.url);
-  const action = url.searchParams.get('action');
-  
-  if (action === 'test-kook-challenge') {
-    return NextResponse.json({
-      message: "KOOK Challenge测试端点正常工作",
-      verify_token_configured: !!KOOK_VERIFY_TOKEN,
-      verify_token_preview: KOOK_VERIFY_TOKEN ? 
-        KOOK_VERIFY_TOKEN.substring(0, 4) + '...' + KOOK_VERIFY_TOKEN.substring(KOOK_VERIFY_TOKEN.length - 4) : 
-        "未设置",
-      timestamp: new Date().toISOString(),
-      note: "KOOK服务器会发送POST请求进行验证，GET请求仅用于测试配置"
-    });
-  }
-  
-  return NextResponse.json({
-    status: "服务运行正常",
-    endpoint: "/api/sendMessage",
-    supported_methods: ["GET", "POST", "OPTIONS"],
-    kook_webhook: {
-      configured: !!KOOK_VERIFY_TOKEN,
-      callback_url: "https://33333-nine.vercel.app/api/sendMessage",
-      verify_token: !!KOOK_VERIFY_TOKEN
-    },
-    timestamp: new Date().toISOString()
-  });
 }
