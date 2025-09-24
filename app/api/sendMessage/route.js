@@ -250,7 +250,7 @@ function extractPositionInfo(text) {
   };
 }
 
-// 生成图片URL的函数 (保留用于直接发送)
+// 生成图片URL的函数
 function generateImageURL(params) {
   const { status, symbol, direction, price, entry, profit, time, BASE } = params;
   
@@ -307,8 +307,8 @@ function simplifyEmojis(text) {
     .replace(/\\u2728/g, dingtalkEmojis["✨"]); // ✨
 }
 
-// 新增：发送到腾讯云函数（KOOK）的函数 - 增强日志版本
-async function sendToKook(messageData, rawData, messageType) {
+// 新增：发送到腾讯云函数（KOOK）的函数 - 支持图片URL
+async function sendToKook(messageData, rawData, messageType, imageUrl = null) {
   if (!SEND_TO_KOOK) {
     console.log("KOOK发送未启用，跳过");
     return { success: true, skipped: true };
@@ -319,15 +319,14 @@ async function sendToKook(messageData, rawData, messageType) {
     console.log("腾讯云函数URL:", TENCENT_CLOUD_KOOK_URL);
     console.log("消息类型:", messageType);
     console.log("格式化消息长度:", messageData.length);
-    console.log("原始数据预览:", rawData.substring(0, 200) + (rawData.length > 200 ? "..." : ""));
+    console.log("图片URL:", imageUrl || "无图片");
     
-    // 简化请求体，只发送必要信息
     const kookPayload = {
       channelId: DEFAULT_KOOK_CHANNEL_ID,
-      message: messageData,
+      formattedMessage: messageData,
       messageType: messageType,
+      imageUrl: imageUrl, // 新增：传递图片URL
       timestamp: Date.now(),
-      // 可选：添加一些交易信息用于调试
       symbol: getSymbol(rawData),
       direction: getDirection(rawData)
     };
@@ -338,7 +337,6 @@ async function sendToKook(messageData, rawData, messageType) {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "User-Agent": "Tradingview-Vercel-Bot/1.0"
       },
       body: JSON.stringify(kookPayload)
     });
@@ -357,7 +355,6 @@ async function sendToKook(messageData, rawData, messageType) {
     return { success: true, data: result };
   } catch (error) {
     console.error("发送到腾讯云KOOK服务失败:", error);
-    // 不抛出错误，避免影响主流程
     return { 
       success: false, 
       error: error.message,
@@ -438,7 +435,6 @@ function formatForDingTalk(raw) {
       `💰 开仓价格: ${formatPriceSmart(entryPrice)}\n\n` +
       (triggerPrice ? `🎯 TP2价格: ${formatPriceSmart(triggerPrice)}\n\n` : "") +
       `📈 盈利: ${profitPercent != null ? Math.round(profitPercent) : "-"}%\n\n` +
-      // 删除了累计盈利的显示
       "✅ 已完全清仓\n\n";
 
     // 在TP2消息中附加图片
@@ -653,9 +649,9 @@ export async function POST(req) {
     console.log("消息类型:", messageType);
     console.log("格式化消息预览:", formattedMessage.substring(0, 200) + (formattedMessage.length > 200 ? "..." : ""));
 
-    // 判断是否需要图片
+    // 判断是否需要图片，并生成图片URL
+    let imageUrl = null;
     let needImage = false;
-    let imageParams = null;
 
     if (isTP1(processedRaw) || isTP2(processedRaw) || isBreakeven(processedRaw)) {
       needImage = true;
@@ -690,17 +686,19 @@ export async function POST(req) {
       if (isTP2(processedRaw)) status = "TP2";
       if (isBreakeven(processedRaw)) status = "BREAKEVEN";
 
-      imageParams = {
+      // 生成图片URL
+      imageUrl = generateImageURL({
         status,
         symbol,
         direction,
-        price: triggerPrice, // 使用触发价格而不是最新价格
+        price: triggerPrice,
         entry: entryPrice,
         profit: profitPercent,
-        time: ts
-      };
+        time: ts,
+        BASE: "https://nextjs-boilerplate-ochre-nine-90.vercel.app"
+      });
       
-      console.log("需要图片，图片参数:", imageParams);
+      console.log("生成的图片URL:", imageUrl);
     }
 
     // 并行发送到钉钉和KOOK
@@ -717,7 +715,15 @@ export async function POST(req) {
           const relayPayload = {
             message: formattedMessage,
             needImage,
-            imageParams,
+            imageParams: imageUrl ? {
+              status: messageType,
+              symbol: getSymbol(processedRaw),
+              direction: getDirection(processedRaw),
+              price: getNum(processedRaw, "触发价格"),
+              entry: getNum(processedRaw, "开仓价格"),
+              profit: extractProfitPctFromText(processedRaw),
+              time: new Date().toLocaleString('zh-CN')
+            } : null,
             dingtalkWebhook: DINGTALK_WEBHOOK
           };
 
@@ -765,10 +771,10 @@ export async function POST(req) {
         }
       })(),
 
-      // 发送到KOOK（新增功能）
+      // 发送到KOOK（新增功能，传递图片URL）
       (async () => {
         console.log("开始发送到KOOK...");
-        return await sendToKook(formattedMessage, processedRaw, messageType);
+        return await sendToKook(formattedMessage, processedRaw, messageType, imageUrl);
       })()
     ]);
 
