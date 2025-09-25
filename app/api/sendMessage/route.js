@@ -369,7 +369,7 @@ async function sendToKook(messageData, rawData, messageType, imageUrl = null) {
   }
 }
 
-// 新增：发送到Discord的函数
+// 新增：发送到Discord的函数 - 修复图片URL显示问题
 async function sendToDiscord(messageData, rawData, messageType, imageUrl = null) {
   if (!SEND_TO_DISCORD || !DISCORD_WEBHOOK_URL) {
     console.log("Discord发送未启用或Webhook未配置，跳过");
@@ -381,41 +381,53 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
     console.log("Discord Webhook URL:", DISCORD_WEBHOOK_URL?.substring(0, 50) + "..."); // 只显示部分URL
     console.log("消息类型:", messageType);
     
-    // 为Discord格式化消息 - 移除Markdown图片语法，因为Discord不支持这种格式
-    let discordMessage = messageData.replace(/!\[.*?\]\(.*?\)/g, '').trim();
+    // 为Discord格式化消息 - 移除Markdown图片语法和交易图表URL
+    let discordMessage = messageData
+      .replace(/!\[.*?\]\(.*?\)/g, '') // 移除Markdown图片语法
+      .replace(/📊 交易图表: https?:\/\/[^\s]+/g, '') // 移除交易图表URL行
+      .replace(/\n{3,}/g, '\n\n') // 移除多余的空行
+      .trim();
     
-    // 如果有图片URL，将其作为单独的内容添加
-    if (imageUrl) {
-      discordMessage += `\n\n📊 交易图表: ${imageUrl}`;
+    // 如果消息为空，跳过发送
+    if (!discordMessage || discordMessage.trim().length === 0) {
+      console.log("Discord消息为空，跳过发送");
+      return { success: true, skipped: true, reason: "空消息" };
     }
     
     // Discord支持简单的Markdown，我们可以利用这一点
     // 为不同消息类型添加颜色标识
     let color = 0x0099FF; // 默认蓝色
-    
+    let title = "交易通知";
+
     switch(messageType) {
       case "TP2":
         color = 0x00FF00; // 绿色
+        title = "🎉 TP2 达成";
         break;
       case "TP1":
         color = 0x00FF00; // 绿色
+        title = "✨ TP1 达成";
         break;
       case "ENTRY":
         color = 0xFFFF00; // 黄色
+        title = "✅ 开仓信号";
         break;
       case "BREAKEVEN":
         color = 0xFFA500; // 橙色
+        title = "🎯 已到保本位置";
         break;
       case "BREAKEVEN_STOP":
         color = 0xFF0000; // 红色
+        title = "🟡 保本止损触发";
         break;
       case "INITIAL_STOP":
         color = 0xFF0000; // 红色
+        title = "🔴 初始止损触发";
         break;
     }
     
     const discordPayload = {
-      content: `🔔 **交易通知** - ${messageType}`,
+      content: `🔔 **${title}**`,
       embeds: [
         {
           title: "无限区块AI交易信号",
@@ -429,7 +441,7 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
       ]
     };
     
-    // 如果有图片URL，添加到embed中
+    // 如果有图片URL，添加到embed中（但不显示在描述里）
     if (imageUrl) {
       discordPayload.embeds[0].image = {
         url: imageUrl
@@ -476,6 +488,20 @@ function getMessageType(text) {
   if (isInitialStop(text)) return "INITIAL_STOP";
   if (isEntry(text)) return "ENTRY";
   return "OTHER";
+}
+
+// 新增：检查是否为有效消息
+function isValidMessage(text) {
+  if (!text || text.trim().length === 0) {
+    return false;
+  }
+  
+  // 检查是否包含关键交易信息
+  const hasTradingKeywords = 
+    /(品种|方向|开仓|止损|TP1|TP2|保本|盈利|胜率|交易次数)/.test(text) ||
+    /(TP2达成|TP1达成|已到保本位置|保本止损|初始止损|【开仓】)/.test(text);
+  
+  return hasTradingKeywords;
 }
 
 function formatForDingTalk(raw) {
@@ -746,6 +772,16 @@ export async function POST(req) {
       .trim();
 
     console.log("处理后的消息:", processedRaw);
+
+    // 新增：检查是否为有效消息
+    if (!isValidMessage(processedRaw)) {
+      console.log("收到无效或空白消息，跳过处理");
+      return NextResponse.json({ 
+        ok: true, 
+        skipped: true, 
+        reason: "无效或空白消息" 
+      });
+    }
 
     const formattedMessage = formatForDingTalk(processedRaw);
     const messageType = getMessageType(processedRaw);
