@@ -10,11 +10,17 @@ const RELAY_SERVICE_URL = process.env.RELAY_SERVICE_URL || "https://send-todingt
 // 腾讯云函数地址 - 用于KOOK消息发送
 const TENCENT_CLOUD_KOOK_URL = process.env.TENCENT_CLOUD_KOOK_URL || "https://1323960433-h9kgnqff21.ap-guangzhou.tencentscf.com";
 
+// Discord Webhook URL
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+
 // 控制是否使用中继服务的开关
 const USE_RELAY_SERVICE = process.env.USE_RELAY_SERVICE === "true"; // 设置为 "true" 启用中继
 
 // 控制是否发送到KOOK的开关
 const SEND_TO_KOOK = process.env.SEND_TO_KOOK === "true"; // 设置为 "true" 启用KOOK发送
+
+// 控制是否发送到Discord的开关
+const SEND_TO_DISCORD = process.env.SEND_TO_DISCORD === "true"; // 设置为 "true" 启用Discord发送
 
 // 默认KOOK频道ID
 const DEFAULT_KOOK_CHANNEL_ID = process.env.DEFAULT_KOOK_CHANNEL_ID || "9709510381680957";
@@ -363,6 +369,104 @@ async function sendToKook(messageData, rawData, messageType, imageUrl = null) {
   }
 }
 
+// 新增：发送到Discord的函数
+async function sendToDiscord(messageData, rawData, messageType, imageUrl = null) {
+  if (!SEND_TO_DISCORD || !DISCORD_WEBHOOK_URL) {
+    console.log("Discord发送未启用或Webhook未配置，跳过");
+    return { success: true, skipped: true };
+  }
+
+  try {
+    console.log("=== 开始发送到Discord ===");
+    console.log("Discord Webhook URL:", DISCORD_WEBHOOK_URL?.substring(0, 50) + "..."); // 只显示部分URL
+    console.log("消息类型:", messageType);
+    
+    // 为Discord格式化消息 - 移除Markdown图片语法，因为Discord不支持这种格式
+    let discordMessage = messageData.replace(/!\[.*?\]\(.*?\)/g, '').trim();
+    
+    // 如果有图片URL，将其作为单独的内容添加
+    if (imageUrl) {
+      discordMessage += `\n\n📊 交易图表: ${imageUrl}`;
+    }
+    
+    // Discord支持简单的Markdown，我们可以利用这一点
+    // 为不同消息类型添加颜色标识
+    let color = 0x0099FF; // 默认蓝色
+    
+    switch(messageType) {
+      case "TP2":
+        color = 0x00FF00; // 绿色
+        break;
+      case "TP1":
+        color = 0x00FF00; // 绿色
+        break;
+      case "ENTRY":
+        color = 0xFFFF00; // 黄色
+        break;
+      case "BREAKEVEN":
+        color = 0xFFA500; // 橙色
+        break;
+      case "BREAKEVEN_STOP":
+        color = 0xFF0000; // 红色
+        break;
+      case "INITIAL_STOP":
+        color = 0xFF0000; // 红色
+        break;
+    }
+    
+    const discordPayload = {
+      content: `🔔 **交易通知** - ${messageType}`,
+      embeds: [
+        {
+          title: "无限区块AI交易信号",
+          description: discordMessage,
+          color: color,
+          timestamp: new Date().toISOString(),
+          footer: {
+            text: "无限社区-AI交易系统"
+          }
+        }
+      ]
+    };
+    
+    // 如果有图片URL，添加到embed中
+    if (imageUrl) {
+      discordPayload.embeds[0].image = {
+        url: imageUrl
+      };
+    }
+
+    console.log("Discord请求负载:", JSON.stringify(discordPayload, null, 2));
+
+    const response = await fetch(DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(discordPayload)
+    });
+
+    console.log("Discord响应状态:", response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Discord响应错误:", errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    console.log("Discord消息发送成功");
+    
+    return { success: true };
+  } catch (error) {
+    console.error("发送到Discord失败:", error);
+    return { 
+      success: false, 
+      error: error.message,
+      skipped: false
+    };
+  }
+}
+
 // 新增：判断消息类型
 function getMessageType(text) {
   if (isTP2(text)) return "TP2";
@@ -701,10 +805,10 @@ export async function POST(req) {
       console.log("生成的图片URL:", imageUrl);
     }
 
-    // 并行发送到钉钉和KOOK
+    // 并行发送到钉钉、KOOK和Discord
     console.log("=== 开始并行发送消息 ===");
     
-    const [dingtalkResult, kookResult] = await Promise.allSettled([
+    const [dingtalkResult, kookResult, discordResult] = await Promise.allSettled([
       // 发送到钉钉（原有逻辑）
       (async () => {
         console.log("开始发送到钉钉...");
@@ -771,22 +875,30 @@ export async function POST(req) {
         }
       })(),
 
-      // 发送到KOOK（新增功能，传递图片URL）
+      // 发送到KOOK（原有功能，传递图片URL）
       (async () => {
         console.log("开始发送到KOOK...");
         return await sendToKook(formattedMessage, processedRaw, messageType, imageUrl);
+      })(),
+
+      // 发送到Discord（新增功能）
+      (async () => {
+        console.log("开始发送到Discord...");
+        return await sendToDiscord(formattedMessage, processedRaw, messageType, imageUrl);
       })()
     ]);
 
     // 处理结果
     const results = {
       dingtalk: dingtalkResult.status === 'fulfilled' ? dingtalkResult.value : { error: dingtalkResult.reason?.message },
-      kook: kookResult.status === 'fulfilled' ? kookResult.value : { error: kookResult.reason?.message }
+      kook: kookResult.status === 'fulfilled' ? kookResult.value : { error: kookResult.reason?.message },
+      discord: discordResult.status === 'fulfilled' ? discordResult.value : { error: discordResult.reason?.message }
     };
 
     console.log("=== 最终发送结果 ===");
     console.log("钉钉结果:", results.dingtalk);
     console.log("KOOK结果:", results.kook);
+    console.log("Discord结果:", results.discord);
 
     return NextResponse.json({ 
       ok: true, 
