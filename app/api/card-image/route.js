@@ -96,7 +96,7 @@ export async function GET(request) {
     const profitColor = "#00ff88";
 
     // 使用 Cloudinary 图片链接
-    let backgroundImageUrl = "https://res.cloudinary.com/dtbc3aa1o/image/upload/c_fill,w_600,h_350,g_auto/v1757087627/bi_yhyeuy.jpg";
+    let backgroundImageUrl = "https://pic1.imgdb.cn/item/68d9494bc5157e1a8841096e.jpg";
     console.log("使用背景图片:", backgroundImageUrl);
     
     // 验证图片是否可访问
