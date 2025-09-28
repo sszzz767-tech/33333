@@ -272,7 +272,7 @@ function generateImageURL(params) {
     entry: entry ? formatPriceSmart(entry) : "",
     profit: profit != null ? profit.toFixed(2) : "",
     time: time || new Date().toLocaleString('zh-CN'),
-    // 添加随机参数避免缓存
+    // 添加随机参数避免缓存 - 这是关键修复！
     _t: Date.now().toString()
   }).toString();
 
