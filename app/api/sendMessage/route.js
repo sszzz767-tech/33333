@@ -72,6 +72,11 @@ function getDirection(text) {
   return direction ? direction.replace(/[^多头空头]/g, '') : null;
 }
 
+// 获取最新价格的函数
+function getLatestPrice(text) {
+  return getNum(text, "最新价格") || getNum(text, "当前价格") || getNum(text, "市价");
+}
+
 // 智能格式化价格，根据原始数据的小数位数显示，最多5位，最少2位
 function formatPriceSmart(value) {
   if (value === null || value === undefined) return "-";
@@ -569,10 +574,10 @@ function formatForDingTalk(raw) {
       `📈 盈利: ${profitPercent != null ? Math.round(profitPercent) : "-"}%\n\n` +
       "✅ 已完全清仓\n\n";
 
-    // 在TP2消息中附加图片
+    // 在TP2消息中附加图片 - 修复价格参数
     try {
-      // 直接使用触发价格而不是最新价格
-      const latest = triggerPrice;
+      // 使用最新价格而不是触发价格
+      const latestPrice = getLatestPrice(text) || triggerPrice;
       
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
@@ -586,7 +591,7 @@ function formatForDingTalk(raw) {
         status: "TP2",
         symbol,
         direction,
-        price: latest,
+        price: latestPrice, // 修复：使用最新价格
         entry: entryPrice,
         profit: profitPercent,
         time: ts,
@@ -610,10 +615,10 @@ function formatForDingTalk(raw) {
       `📈 盈利: ${profitPercent != null ? Math.round(profitPercent) : "-"}%\n\n`;
       // 删除了累计盈利的显示
 
-    // 在TP1消息中附加图片
+    // 在TP1消息中附加图片 - 修复价格参数
     try {
-      // 直接使用触发价格而不是最新价格
-      const latest = triggerPrice;
+      // 使用最新价格而不是触发价格
+      const latestPrice = getLatestPrice(text) || triggerPrice;
       
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
@@ -627,7 +632,7 @@ function formatForDingTalk(raw) {
         status: "TP1",
         symbol,
         direction,
-        price: latest,
+        price: latestPrice, // 修复：使用最新价格
         entry: entryPrice,
         profit: profitPercent,
         time: ts,
@@ -660,10 +665,10 @@ function formatForDingTalk(raw) {
       (actualProfitPercent !== null ? `📈 盈利: ${actualProfitPercent.toFixed(2)}%\n\n` : "") +
       "⚠️ 请把止损移到开仓位置（保本）\n\n";
 
-    // 为保本位置消息附加图片
+    // 为保本位置消息附加图片 - 修复价格参数
     try {
-      // 直接使用触发价格而不是最新价格
-      const latest = triggerPrice;
+      // 使用最新价格而不是触发价格
+      const latestPrice = getLatestPrice(text) || triggerPrice;
       
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
@@ -677,7 +682,7 @@ function formatForDingTalk(raw) {
         status: "BREAKEVEN",
         symbol,
         direction,
-        price: latest,
+        price: latestPrice, // 修复：使用最新价格
         entry: entryPrice,
         profit: actualProfitPercent,
         time: ts,
@@ -828,12 +833,13 @@ export async function POST(req) {
       if (isTP2(processedRaw)) status = "TP2";
       if (isBreakeven(processedRaw)) status = "BREAKEVEN";
 
-      // 生成图片URL
+      // 生成图片URL - 修复价格参数
+      const latestPrice = getLatestPrice(processedRaw) || triggerPrice;
       imageUrl = generateImageURL({
         status,
         symbol,
         direction,
-        price: triggerPrice,
+        price: latestPrice, // 修复：使用最新价格
         entry: entryPrice,
         profit: profitPercent,
         time: ts,
