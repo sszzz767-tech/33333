@@ -256,7 +256,7 @@ function extractPositionInfo(text) {
   };
 }
 
-// 生成图片URL的函数
+// 生成图片URL的函数 - 修复Discord缓存问题
 function generateImageURL(params) {
   const { status, symbol, direction, price, entry, profit, time, BASE } = params;
   
@@ -272,6 +272,8 @@ function generateImageURL(params) {
     entry: entry ? formatPriceSmart(entry) : "",
     profit: profit != null ? profit.toFixed(2) : "",
     time: time || new Date().toLocaleString('zh-CN'),
+    // 添加随机参数避免缓存
+    _t: Date.now().toString()
   }).toString();
 
   return `${BASE}/api/card-image?${qs}`;
