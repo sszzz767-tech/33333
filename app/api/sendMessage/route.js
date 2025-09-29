@@ -420,11 +420,11 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
         title = "✅ 开仓信号";
         break;
       case "BREAKEVEN":
-        color = 0xFFA500; // 橙色
+        color = 0x00FF00; // 橙色
         title = "🎯 已到保本位置";
         break;
       case "BREAKEVEN_STOP":
-        color = 0xFF0000; // 红色
+        color = 0xFFA500; // 红色
         title = "🟡 保本止损触发";
         break;
       case "INITIAL_STOP":
