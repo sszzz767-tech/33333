@@ -1,68 +1,3 @@
-import { ImageResponse } from "@vercel/og";
-
-export const runtime = "edge";
-export const dynamic = 'force-dynamic';
-
-async function isImageAccessible(url) {
-  try {
-    const response = await fetch(url, { method: 'HEAD' });
-    return response.ok;
-  } catch (error) {
-    console.error("图片验证失败:", error);
-    return false;
-  }
-}
-
-// 辅助函数：智能格式化价格显示
-function formatPriceSmart(value) {
-  if (!value) return "0.00";
-  
-  // 如果是字符串，直接使用
-  if (typeof value === 'string') {
-    // 检查字符串中的小数位数
-    const decimalIndex = value.indexOf('.');
-    if (decimalIndex === -1) {
-      return value + ".00"; // 没有小数部分，添加两位小数
-    }
-    
-    const decimalPart = value.substring(decimalIndex + 1);
-    const decimalLength = decimalPart.length;
-    
-    if (decimalLength === 0) {
-      return value + "00"; // 只有小数点，添加两位小数
-    } else if (decimalLength === 1) {
-      return value + "0"; // 只有一位小数，补零
-    } else if (decimalLength > 5) {
-      // 超过5位小数，截断到5位
-      const num = parseFloat(value);
-      return isNaN(num) ? value : num.toFixed(5);
-    }
-    
-    return value; // 2-5位小数，直接返回
-  }
-  
-  // 如果是数字，转换为字符串处理
-  const strValue = value.toString();
-  const decimalIndex = strValue.indexOf('.');
-  
-  if (decimalIndex === -1) {
-    return strValue + ".00"; // 没有小数部分，添加两位小数
-  }
-  
-  const decimalPart = strValue.substring(decimalIndex + 1);
-  const decimalLength = decimalPart.length;
-  
-  if (decimalLength === 0) {
-    return strValue + "00"; // 只有小数点，添加两位小数
-  } else if (decimalLength === 1) {
-    return strValue + "0"; // 只有一位小数，补零
-  } else if (decimalLength > 5) {
-    return value.toFixed(5); // 超过5位小数，截断到5位
-  }
-  
-  return strValue; // 2-5位小数，直接返回
-}
-
 export async function GET(request) {
   try {
     // ==================== 添加调试信息开始 ====================
@@ -83,12 +18,17 @@ export async function GET(request) {
     console.log("收到图片生成请求");
     console.log("查询参数:", Object.fromEntries(searchParams.entries()));
 
-    // 获取查询参数
+    // 获取查询参数 - 修复price参数处理
     const status = searchParams.get("status") || "ENTRY";
     const symbol = searchParams.get("symbol") || "ETHUSDT.P";
     const direction = searchParams.get("direction") || "买";
-    const price = searchParams.get("price") || searchParams.get("entry") || "-"; // 智能格式化价格
-    const entry = formatPriceSmart(searchParams.get("entry") || "4387.38"); // 智能格式化价格
+    
+    // 修复：确保price参数正确处理，如果为空则使用entry
+    const rawPrice = searchParams.get("price");
+    const rawEntry = searchParams.get("entry");
+    const price = rawPrice ? formatPriceSmart(rawPrice) : (rawEntry ? formatPriceSmart(rawEntry) : "-");
+    const entry = formatPriceSmart(rawEntry || "4387.38");
+    
     const profit = searchParams.get("profit") || "115.18";
     const time = searchParams.get("time") || new Date().toLocaleString('zh-CN');
 
@@ -102,7 +42,6 @@ export async function GET(request) {
     const height = 350;
 
     // 根据方向设置颜色和文本
-    // 修复方向显示问题：多头显示"买"和绿色，空头显示"卖"和红色
     let directionText = "买";
     let directionColor = "#00ff88"; // 绿色
     
