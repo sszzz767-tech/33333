@@ -65,9 +65,22 @@ function formatPriceSmart(value) {
 
 export async function GET(request) {
   try {
-    console.log("收到图片生成请求");
-    
+    // ==================== 添加调试信息开始 ====================
+    console.log("=== 图片生成详细调试 ===");
+    console.log("完整请求URL:", request.url);
     const { searchParams } = new URL(request.url);
+    console.log("所有查询参数:");
+    console.log("- status:", searchParams.get("status"));
+    console.log("- symbol:", searchParams.get("symbol"));
+    console.log("- direction:", searchParams.get("direction"));
+    console.log("- price参数:", searchParams.get("price"), "(原始值)");
+    console.log("- entry参数:", searchParams.get("entry"), "(原始值)");
+    console.log("- profit参数:", searchParams.get("profit"));
+    console.log("- time参数:", searchParams.get("time"));
+    console.log("- _t参数:", searchParams.get("_t"));
+    // ==================== 添加调试信息结束 ====================
+
+    console.log("收到图片生成请求");
     console.log("查询参数:", Object.fromEntries(searchParams.entries()));
 
     // 获取查询参数
@@ -78,6 +91,11 @@ export async function GET(request) {
     const entry = formatPriceSmart(searchParams.get("entry") || "4387.38"); // 智能格式化价格
     const profit = searchParams.get("profit") || "115.18";
     const time = searchParams.get("time") || new Date().toLocaleString('zh-CN');
+
+    // ==================== 验证最终显示的值 ====================
+    console.log("最终显示值:");
+    console.log("- price显示:", price);
+    console.log("- entry显示:", entry);
 
     // 设置图片宽高
     const width = 600;
