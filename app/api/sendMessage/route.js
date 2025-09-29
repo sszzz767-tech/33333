@@ -450,7 +450,24 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
     
     // 如果有图片URL，强制刷新Discord的图片缓存
     if (imageUrl) {
+      console.log("=== Discord图片URL调试 ===");
       console.log("原始图片URL:", imageUrl);
+      
+      // 解析URL参数进行调试
+      try {
+        const url = new URL(imageUrl);
+        const params = new URLSearchParams(url.search);
+        console.log("URL参数详情:");
+        console.log("- status:", params.get('status'));
+        console.log("- symbol:", params.get('symbol'));
+        console.log("- direction:", params.get('direction'));
+        console.log("- price参数:", params.get('price'));
+        console.log("- entry参数:", params.get('entry'));
+        console.log("- profit参数:", params.get('profit'));
+        console.log("- time参数:", params.get('time'));
+      } catch (error) {
+        console.error("解析URL失败:", error);
+      }
       
       // 方法1：在URL末尾添加随机参数强制刷新
       const randomParam = `discord_refresh=${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
