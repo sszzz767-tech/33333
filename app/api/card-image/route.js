@@ -18,24 +18,42 @@ export async function GET(request) {
     console.log("收到图片生成请求");
     console.log("查询参数:", Object.fromEntries(searchParams.entries()));
 
-    // 获取查询参数 - 修复price参数处理
-    const status = searchParams.get("status") || "ENTRY";
-    const symbol = searchParams.get("symbol") || "ETHUSDT.P";
-    const direction = searchParams.get("direction") || "买";
-    
-    // 修复：确保price参数正确处理，如果为空则使用entry
-    const rawPrice = searchParams.get("price");
-    const rawEntry = searchParams.get("entry");
-    const price = rawPrice ? formatPriceSmart(rawPrice) : (rawEntry ? formatPriceSmart(rawEntry) : "-");
-    const entry = formatPriceSmart(rawEntry || "4387.38");
-    
-    const profit = searchParams.get("profit") || "115.18";
-    const time = searchParams.get("time") || new Date().toLocaleString('zh-CN');
+    // 在图片生成代码中，修改参数获取部分：
 
-    // ==================== 验证最终显示的值 ====================
-    console.log("最终显示值:");
-    console.log("- price显示:", price);
-    console.log("- entry显示:", entry);
+// 获取查询参数 - 修复price参数处理
+const status = searchParams.get("status") || "ENTRY";
+const symbol = searchParams.get("symbol") || "ETHUSDT.P";
+const direction = searchParams.get("direction") || "买";
+
+// 修复：确保price参数正确处理
+const rawPrice = searchParams.get("price");
+const rawEntry = searchParams.get("entry");
+
+// 如果price为空，根据消息类型决定使用什么值
+let priceDisplay = "-";
+if (rawPrice) {
+  priceDisplay = formatPriceSmart(rawPrice);
+} else {
+  // 对于不同状态的消息，使用不同的默认值
+  if (status === "TP1" || status === "TP2") {
+    // 对于止盈消息，如果没有price，使用entry作为备选
+    priceDisplay = formatPriceSmart(rawEntry || "-");
+  } else if (status === "BREAKEVEN") {
+    // 对于保本消息，使用触发价格或entry
+    priceDisplay = formatPriceSmart(rawEntry || "-");
+  } else {
+    priceDisplay = "-";
+  }
+}
+
+const entry = formatPriceSmart(rawEntry || "4387.38");
+const profit = searchParams.get("profit") || "115.18";
+const time = searchParams.get("time") || new Date().toLocaleString('zh-CN');
+
+// ==================== 验证最终显示的值 ====================
+console.log("最终显示值:");
+console.log("- price显示:", priceDisplay);
+console.log("- entry显示:", entry);
 
     // 设置图片宽高
     const width = 600;
