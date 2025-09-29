@@ -385,7 +385,7 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
 
   try {
     console.log("=== 开始发送到Discord ===");
-    console.log("Discord Webhook URL:", DISCORD_WEBHOOK_URL?.substring(0, 50) + "..."); // 只显示部分URL
+    console.log("Discord Webhook URL:", DISCORD_WEBHOOK_URL?.substring(0, 50) + "...");
     console.log("消息类型:", messageType);
     
     // 为Discord格式化消息 - 移除Markdown图片语法和交易图表URL
@@ -448,11 +448,29 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
       ]
     };
     
-    // 如果有图片URL，添加到embed中（但不显示在描述里）
+    // 如果有图片URL，强制刷新Discord的图片缓存
     if (imageUrl) {
+      console.log("原始图片URL:", imageUrl);
+      
+      // 方法1：在URL末尾添加随机参数强制刷新
+      const randomParam = `discord_refresh=${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+      const separator = imageUrl.includes('?') ? '&' : '?';
+      const refreshedImageUrl = `${imageUrl}${separator}${randomParam}`;
+      
+      console.log("刷新后的图片URL:", refreshedImageUrl);
+      
       discordPayload.embeds[0].image = {
-        url: imageUrl
+        url: refreshedImageUrl
       };
+      
+      // 方法2：同时添加一个隐藏的附件字段来强制刷新
+      discordPayload.embeds[0].fields = [
+        {
+          name: " ",
+          value: `[交易详情](${refreshedImageUrl})`,
+          inline: false
+        }
+      ];
     }
 
     console.log("Discord请求负载:", JSON.stringify(discordPayload, null, 2));
@@ -461,6 +479,10 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
+        // 添加缓存控制头
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
       },
       body: JSON.stringify(discordPayload)
     });
