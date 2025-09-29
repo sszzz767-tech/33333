@@ -448,27 +448,32 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
       ]
     };
     
-    // 强制为Discord重新生成图片URL，确保使用正确的参数
-    if (imageUrl) {
-      console.log("=== 强制重新生成Discord图片URL ===");
-      
-      // 从原始数据中提取正确的参数
-      const symbol = getSymbol(rawData);
-      const direction = getDirection(rawData);
-      const entryPrice = getNum(rawData, "开仓价格");
-      
-      // 根据消息类型提取正确的价格
-      let correctPrice = null;
-      if (isTP2(rawData)) {
-        correctPrice = getNum(rawData, "TP2价格") || getNum(rawData, "TP2");
-      } else if (isTP1(rawData)) {
-        correctPrice = getNum(rawData, "TP1价格") || getNum(rawData, "TP1");
-      } else if (isBreakeven(rawData)) {
-        correctPrice = getNum(rawData, "保本位");
-      }
-      
-      const profitPercent = extractProfitPctFromText(rawData) ||
-        (entryPrice && correctPrice ? calcAbsProfitPct(entryPrice, correctPrice) : null);
+// 强制为Discord重新生成图片URL，确保使用正确的参数
+if (imageUrl) {
+  console.log("=== 强制重新生成Discord图片URL ===");
+  
+  // 从原始数据中提取正确的参数
+  const symbol = getSymbol(rawData);
+  const direction = getDirection(rawData);
+  const entryPrice = getNum(rawData, "开仓价格");
+  
+  // 根据消息类型提取正确的价格 - 修复这里！
+  let correctPrice = null;
+  if (isTP2(rawData)) {
+    correctPrice = getNum(rawData, "TP2价格") || getNum(rawData, "TP2") || getNum(rawData, "平仓价格");
+  } else if (isTP1(rawData)) {
+    correctPrice = getNum(rawData, "TP1价格") || getNum(rawData, "TP1") || getNum(rawData, "平仓价格");
+  } else if (isBreakeven(rawData)) {
+    correctPrice = getNum(rawData, "触发价格") || getNum(rawData, "保本位"); // 修复：使用"触发价格"
+  }
+  
+  // 如果还是为空，使用最新价格
+  if (correctPrice === null) {
+    correctPrice = getLatestPrice(rawData);
+  }
+  
+  const profitPercent = extractProfitPctFromText(rawData) ||
+    (entryPrice && correctPrice ? calcAbsProfitPct(entryPrice, correctPrice) : null);
 
       const pad = (n) => (n < 10 ? "0" + n : "" + n);
       const now = new Date();
