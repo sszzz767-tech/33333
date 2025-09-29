@@ -448,46 +448,67 @@ async function sendToDiscord(messageData, rawData, messageType, imageUrl = null)
       ]
     };
     
-    // 如果有图片URL，强制刷新Discord的图片缓存
+    // 强制为Discord重新生成图片URL，确保使用正确的参数
     if (imageUrl) {
-      console.log("=== Discord图片URL调试 ===");
-      console.log("原始图片URL:", imageUrl);
+      console.log("=== 强制重新生成Discord图片URL ===");
       
-      // 解析URL参数进行调试
-      try {
-        const url = new URL(imageUrl);
-        const params = new URLSearchParams(url.search);
-        console.log("URL参数详情:");
-        console.log("- status:", params.get('status'));
-        console.log("- symbol:", params.get('symbol'));
-        console.log("- direction:", params.get('direction'));
-        console.log("- price参数:", params.get('price'));
-        console.log("- entry参数:", params.get('entry'));
-        console.log("- profit参数:", params.get('profit'));
-        console.log("- time参数:", params.get('time'));
-      } catch (error) {
-        console.error("解析URL失败:", error);
+      // 从原始数据中提取正确的参数
+      const symbol = getSymbol(rawData);
+      const direction = getDirection(rawData);
+      const entryPrice = getNum(rawData, "开仓价格");
+      
+      // 根据消息类型提取正确的价格
+      let correctPrice = null;
+      if (isTP2(rawData)) {
+        correctPrice = getNum(rawData, "TP2价格") || getNum(rawData, "TP2");
+      } else if (isTP1(rawData)) {
+        correctPrice = getNum(rawData, "TP1价格") || getNum(rawData, "TP1");
+      } else if (isBreakeven(rawData)) {
+        correctPrice = getNum(rawData, "保本位");
       }
       
-      // 方法1：在URL末尾添加随机参数强制刷新
-      const randomParam = `discord_refresh=${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-      const separator = imageUrl.includes('?') ? '&' : '?';
-      const refreshedImageUrl = `${imageUrl}${separator}${randomParam}`;
-      
-      console.log("刷新后的图片URL:", refreshedImageUrl);
+      const profitPercent = extractProfitPctFromText(rawData) ||
+        (entryPrice && correctPrice ? calcAbsProfitPct(entryPrice, correctPrice) : null);
+
+      const pad = (n) => (n < 10 ? "0" + n : "" + n);
+      const now = new Date();
+      const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+        now.getDate()
+      )} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(
+        now.getSeconds()
+      )}`;
+
+      let status = "INFO";
+      if (isTP1(rawData)) status = "TP1";
+      if (isTP2(rawData)) status = "TP2";
+      if (isBreakeven(rawData)) status = "BREAKEVEN";
+
+      console.log("重新生成的参数:");
+      console.log("- status:", status);
+      console.log("- symbol:", symbol);
+      console.log("- direction:", direction);
+      console.log("- correctPrice:", correctPrice);
+      console.log("- entryPrice:", entryPrice);
+      console.log("- profitPercent:", profitPercent);
+
+      // 为Discord重新生成图片URL，确保参数正确
+      const discordImageUrl = generateImageURL({
+        status,
+        symbol,
+        direction,
+        price: correctPrice,
+        entry: entryPrice,
+        profit: profitPercent,
+        time: ts,
+        BASE: "https://nextjs-boilerplate-ochre-nine-90.vercel.app"
+      });
+
+      console.log("原始图片URL:", imageUrl);
+      console.log("重新生成的Discord图片URL:", discordImageUrl);
       
       discordPayload.embeds[0].image = {
-        url: refreshedImageUrl
+        url: discordImageUrl
       };
-      
-      // 方法2：同时添加一个隐藏的附件字段来强制刷新
-      discordPayload.embeds[0].fields = [
-        {
-          name: " ",
-          value: `[交易详情](${refreshedImageUrl})`,
-          inline: false
-        }
-      ];
     }
 
     console.log("Discord请求负载:", JSON.stringify(discordPayload, null, 2));
