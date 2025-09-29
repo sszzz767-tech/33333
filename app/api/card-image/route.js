@@ -74,7 +74,7 @@ export async function GET(request) {
     const status = searchParams.get("status") || "ENTRY";
     const symbol = searchParams.get("symbol") || "ETHUSDT.P";
     const direction = searchParams.get("direction") || "买";
-    const price = formatPriceSmart(searchParams.get("price") || "4320.00"); // 智能格式化价格
+    const price = searchParams.get("price") || searchParams.get("entry") || "-"; // 智能格式化价格
     const entry = formatPriceSmart(searchParams.get("entry") || "4387.38"); // 智能格式化价格
     const profit = searchParams.get("profit") || "115.18";
     const time = searchParams.get("time") || new Date().toLocaleString('zh-CN');
