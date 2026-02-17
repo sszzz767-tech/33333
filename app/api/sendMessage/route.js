@@ -126,7 +126,7 @@ function getImagePrice(rawData, entryPrice) {
   return finalPrice;
 }
 
-// ---------- 构建 Cloudinary 图片 URL（最终版，USDT 自动跟随）----------
+// ---------- 构建 Cloudinary 图片 URL（带随机浮动）----------
 function generateImageURL(params) {
   const { symbol, direction, entry, price, capital = DEFAULT_CAPITAL } = params;
 
@@ -134,17 +134,22 @@ function generateImageURL(params) {
   const CLOUD_NAME = 'dtbc3aa1o';
   const BASE_IMAGE_ID = 'NEW1_bh9ysa';
 
-  // --- 2. 计算盈利金额 ---
+  // --- 2. 计算盈利金额（先精确计算）---
   const entryNum = parseFloat(entry);
   const priceNum = parseFloat(price);
   let profitAmount = 0;
   if (!isNaN(entryNum) && !isNaN(priceNum)) {
     if (direction === '卖') {
-      profitAmount = DEFAULT_CAPITAL * 30 * ((entryNum - priceNum) / entryNum);
+      profitAmount = capital * 30 * ((entryNum - priceNum) / entryNum);
     } else {
-      profitAmount = DEFAULT_CAPITAL * 30 * ((priceNum - entryNum) / entryNum);
+      profitAmount = capital * 30 * ((priceNum - entryNum) / entryNum);
     }
   }
+  
+  // 添加随机浮动：在理论值的 ±5% 范围内随机调整
+  const randomFactor = 0.95 + Math.random() * 0.1; // 0.95 ~ 1.05
+  profitAmount = profitAmount * randomFactor;
+  
   const displayProfit = (profitAmount > 0 ? '+' : '') + profitAmount.toFixed(2);
   const profitColor = profitAmount >= 0 ? '35b97c' : 'cc3333'; // 正绿负红
 
